@@ -19,36 +19,20 @@ public class ParquetConverterService {
         this.writeUtil = writeUtil;
     }
     public Resource convertJson(MultipartFile inputFile, Format inputFormat) {
-        try {
-            List<Map<String, Object>> data = readData(inputFile, inputFormat);
-            return writeUtil.writeToJson(data);
-        } catch (Exception e) {
-            throw new ConversionException("Failed to convert to JSON: " + e.getMessage(), e);
-        }
+        List<Map<String, Object>> data = readData(inputFile, inputFormat);
+        return writeUtil.writeToJson(data);
     }
     public Resource convertCsv(MultipartFile inputFile, Format inputFormat) {
-        try {
-            List<Map<String, Object>> data = readData(inputFile, inputFormat);
-            return writeUtil.writeToCsv(data);
-        } catch (Exception e) {
-            throw new ConversionException("Failed to convert to CSV: " + e.getMessage(), e);
-        }
+        List<Map<String, Object>> data = readData(inputFile, inputFormat);
+        return writeUtil.writeToCsv(data);
     }
     public Resource convertXml(MultipartFile inputFile, Format inputFormat) {
-        try {
-            List<Map<String, Object>> data = readData(inputFile, inputFormat);
-            return writeUtil.writeToXml(data);
-        } catch (Exception e) {
-            throw new ConversionException("Failed to convert to XML: " + e.getMessage(), e);
-        }
+        List<Map<String, Object>> data = readData(inputFile, inputFormat);
+        return writeUtil.writeToXml(data);
     }
     public Resource convertParquet(MultipartFile inputFile, Format inputFormat) {
-        try {
-            List<Map<String, Object>> data = readData(inputFile, inputFormat);
-            return writeUtil.writeToParquet(data);
-        } catch (Exception e) {
-            throw new ConversionException("Failed to convert to Parquet: " + e.getMessage(), e);
-        }
+        List<Map<String, Object>> data = readData(inputFile, inputFormat);
+        return writeUtil.writeToParquet(data);
     }
 
     private List<Map<String, Object>> readData(MultipartFile file, Format format) {

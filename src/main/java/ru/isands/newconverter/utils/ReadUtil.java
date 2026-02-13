@@ -104,12 +104,14 @@ public class ReadUtil {
             }
             
             // Try to parse as array first
-            try {
+            if (content.startsWith("[")) {
                 return jsonMapper.readValue(content, List.class);
-            } catch (Exception e) {
-                // If not an array, try as single object
+            } else if (content.startsWith("{")) {
+                // Parse as single object
                 Map<String, Object> single = jsonMapper.readValue(content, Map.class);
                 return Collections.singletonList(single);
+            } else {
+                throw new ConversionException("Invalid JSON format: must start with '[' or '{'");
             }
         } catch (IOException e) {
             throw new ConversionException("Failed to read JSON file: " + e.getMessage(), e);

@@ -160,7 +160,6 @@ public class WriteUtil {
     private Class<?> determineColumnType(List<Map<String, Object>> data, String column) {
         boolean allNumbers = true;
         boolean hasDecimal = false;
-        boolean allBooleans = true;
         
         for (Map<String, Object> record : data) {
             Object value = record.get(column);
@@ -168,13 +167,6 @@ public class WriteUtil {
                 String strValue = value.toString().trim();
                 if (strValue.isEmpty()) {
                     continue;
-                }
-                
-                // Check for boolean
-                String lowerValue = strValue.toLowerCase();
-                if (!lowerValue.equals("true") && !lowerValue.equals("false") &&
-                    !lowerValue.equals("1") && !lowerValue.equals("0")) {
-                    allBooleans = false;
                 }
                 
                 // Check for number
@@ -190,7 +182,6 @@ public class WriteUtil {
                 }
             } else if (value != null) {
                 // Already typed value
-                allBooleans = false;
                 if (!(value instanceof Number)) {
                     allNumbers = false;
                 } else if (value instanceof Double || value instanceof Float) {
@@ -199,7 +190,6 @@ public class WriteUtil {
             }
         }
         
-        if (allBooleans) return Boolean.class;
         if (allNumbers) {
             if (hasDecimal) {
                 return Double.class;
@@ -225,6 +215,25 @@ public class WriteUtil {
                 return fitsInInteger ? Integer.class : Long.class;
             }
         }
+        
+        // Check for boolean only if not all numbers
+        boolean allBooleans = true;
+        for (Map<String, Object> record : data) {
+            Object value = record.get(column);
+            if (value != null) {
+                String strValue = value.toString().toLowerCase().trim();
+                if (!strValue.isEmpty() &&
+                        !strValue.equals("true") &&
+                        !strValue.equals("false") &&
+                        !strValue.equals("1") &&
+                        !strValue.equals("0")) {
+                    allBooleans = false;
+                    break;
+                }
+            }
+        }
+        if (allBooleans) return Boolean.class;
+        
         return String.class;
     }
 
@@ -302,8 +311,9 @@ public class WriteUtil {
         if (types.isEmpty()) {
             return Schema.create(Schema.Type.STRING);
         }
+        // Check if any type is a Map or List implementation
         for (Class<?> type : types) {
-            if (type == Map.class || type == List.class || type == LinkedHashMap.class || type == ArrayList.class) {
+            if (Map.class.isAssignableFrom(type) || List.class.isAssignableFrom(type)) {
                 return Schema.create(Schema.Type.STRING);
             }
         }
@@ -325,7 +335,7 @@ public class WriteUtil {
     }
     
     private boolean parseBoolean(String value) {
-        String lowerValue = value.toLowerCase();
+        String lowerValue = value.toLowerCase().trim();
         return lowerValue.equals("true") || lowerValue.equals("1");
     }
 }
