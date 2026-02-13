@@ -1,0 +1,13 @@
+spring:
+  servlet:
+    multipart:
+      max-file-size: 100MB
+      max-request-size: 100MB
+      enabled: true
+app:
+  temp-dir: /tmp/parquet-converter
+jak:
+  jaxb:
+    context:
+      path: de.micromata.jak.kml
+
