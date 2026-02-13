@@ -4,7 +4,6 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.dataformat.xml.XmlMapper;
 import com.opencsv.CSVReader;
 import com.opencsv.exceptions.CsvValidationException;
-import de.micromata.opengis.kml.v_2_2_0.*;
 import org.apache.avro.Schema;
 import org.apache.avro.generic.GenericData;
 import org.apache.avro.generic.GenericRecord;
@@ -14,11 +13,9 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 import org.springframework.web.multipart.MultipartFile;
 import ru.isands.newconverter.enums.Format;
+import ru.isands.newconverter.exception.ConversionException;
 
-import java.io.File;
-import java.io.IOException;
-import java.io.InputStreamReader;
-import java.io.Reader;
+import java.io.*;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
 
@@ -33,25 +30,20 @@ public class ReadUtil {
     private final ObjectMapper jsonMapper = new ObjectMapper();
     private final XmlMapper xmlMapper = new XmlMapper();
 
-    public List<Map<String, Object>> readKml(MultipartFile file) throws IOException{
-        List<Map<String, Object>> result = new ArrayList<>();
-        String kmlContent = new String(file.getBytes(), StandardCharsets.UTF_8);
-        Kml kml = Kml.unmarshal(kmlContent);
-        if(kml.getFeature() instanceof Document document){
-            extractFeatures(document.getFeature(), result, "");
-        }else if(kml.getFeature() instanceof Placemark){
-            Map<String, Object> record = convertPlacemarkToMap((Placemark) kml.getFeature(), "");
-            result.add(record);
+    public List<Map<String, Object>> readParquet(MultipartFile file) {
+        if (file.isEmpty()) {
+            throw new ConversionException("Uploaded Parquet file is empty");
         }
-        return result;
-    }
-    public List<Map<String, Object>> readParquet(MultipartFile file) throws IOException {
+        
         List<Map<String, Object>> result = new ArrayList<>();
-        File tempFile = File.createTempFile("parquet_input_", Format.PARQUET.getSuffix(), new File(tempDir));
+        File tempFile = null;
         try {
+            tempFile = File.createTempFile("parquet_input_", Format.PARQUET.getSuffix(), new File(tempDir));
             file.transferTo(tempFile);
+            
             try (ParquetReader<GenericRecord> reader = AvroParquetReader
                     .<GenericRecord>builder(new org.apache.hadoop.fs.Path(tempFile.getAbsolutePath()))
+                    .disableCompatibility()
                     .build()) {
                 GenericRecord record;
                 while ((record = reader.read()) != null) {
@@ -63,17 +55,29 @@ public class ReadUtil {
                     result.add(map);
                 }
             }
+            return result;
+        } catch (IOException e) {
+            throw new ConversionException("Failed to read Parquet file: " + e.getMessage(), e);
         } finally {
-            tempFile.delete();
+            if (tempFile != null && tempFile.exists()) {
+                tempFile.delete();
+            }
         }
-        return result;
     }
-    public List<Map<String, Object>> readCsv(MultipartFile file) throws IOException, CsvValidationException {
+    public List<Map<String, Object>> readCsv(MultipartFile file) {
+        if (file.isEmpty()) {
+            throw new ConversionException("Uploaded CSV file is empty");
+        }
+        
         List<Map<String, Object>> result = new ArrayList<>();
         try (Reader reader = new InputStreamReader(file.getInputStream(), StandardCharsets.UTF_8);
              CSVReader csvReader = new CSVReader(reader)) {
+            
             String[] headers = csvReader.readNext();
-            if (headers == null) return result;
+            if (headers == null || headers.length == 0) {
+                return result;
+            }
+            
             String[] row;
             while ((row = csvReader.readNext()) != null) {
                 Map<String, Object> map = new LinkedHashMap<>();
@@ -83,30 +87,64 @@ public class ReadUtil {
                 }
                 result.add(map);
             }
+            return result;
+        } catch (IOException | CsvValidationException e) {
+            throw new ConversionException("Failed to read CSV file: " + e.getMessage(), e);
         }
-        return result;
     }
-    public List<Map<String, Object>> readJson(MultipartFile file) throws IOException {
-        String content = new String(file.getBytes(), StandardCharsets.UTF_8);
+    public List<Map<String, Object>> readJson(MultipartFile file) {
+        if (file.isEmpty()) {
+            throw new ConversionException("Uploaded JSON file is empty");
+        }
+        
         try {
-            return jsonMapper.readValue(content, List.class);
-        } catch (Exception e) {
-            Map<String, Object> single = jsonMapper.readValue(content, Map.class);
-            return Collections.singletonList(single);
+            String content = new String(file.getBytes(), StandardCharsets.UTF_8).trim();
+            if (content.isEmpty()) {
+                throw new ConversionException("JSON file content is empty");
+            }
+            
+            // Try to parse as array first
+            if (content.startsWith("[")) {
+                return jsonMapper.readValue(content, List.class);
+            } else if (content.startsWith("{")) {
+                // Parse as single object
+                Map<String, Object> single = jsonMapper.readValue(content, Map.class);
+                return Collections.singletonList(single);
+            } else {
+                throw new ConversionException("Invalid JSON format: must start with '[' or '{'");
+            }
+        } catch (IOException e) {
+            throw new ConversionException("Failed to read JSON file: " + e.getMessage(), e);
         }
     }
-    public List<Map<String, Object>> readXml(MultipartFile file) throws IOException {
-        String content = new String(file.getBytes(), StandardCharsets.UTF_8);
-        Map<String, Object> data = xmlMapper.readValue(content, Map.class);
-        if (data.containsKey("records")) {
-            Object records = data.get("records");
-            if (records instanceof List) {
-                return (List<Map<String, Object>>) records;
-            } else if (records instanceof Map) {
-                return Collections.singletonList((Map<String, Object>) records);
-            }
+    public List<Map<String, Object>> readXml(MultipartFile file) {
+        if (file.isEmpty()) {
+            throw new ConversionException("Uploaded XML file is empty");
         }
-        return Collections.singletonList(data);
+        
+        try {
+            String content = new String(file.getBytes(), StandardCharsets.UTF_8).trim();
+            if (content.isEmpty()) {
+                throw new ConversionException("XML file content is empty");
+            }
+            
+            Map<String, Object> data = xmlMapper.readValue(content, Map.class);
+            
+            // Try to find a records wrapper element
+            if (data.containsKey("records")) {
+                Object records = data.get("records");
+                if (records instanceof List) {
+                    return (List<Map<String, Object>>) records;
+                } else if (records instanceof Map) {
+                    return Collections.singletonList((Map<String, Object>) records);
+                }
+            }
+            
+            // If no records wrapper, return the entire document as a single record
+            return Collections.singletonList(data);
+        } catch (IOException e) {
+            throw new ConversionException("Failed to read XML file: " + e.getMessage(), e);
+        }
     }
     private Object convertAvroValue(Object value) {
         if (value == null) return null;
@@ -141,68 +179,5 @@ public class ReadUtil {
             return result;
         }
         return value;
-    }
-    private void extractFeatures(List<Feature> features, List<Map<String, Object>> result, String path){
-        if (features == null) return;
-        for (Feature feature: features){
-            if(feature instanceof Placemark){
-                Map<String, Object> record = convertPlacemarkToMap((Placemark) feature, path);
-                result.add(record);
-            }else if(feature instanceof Folder folder){
-                String newPath = path + (path.isEmpty() ? "" : "/") +
-                        (folder.getName() != null ? folder.getName() : "Unnamed");
-                extractFeatures(folder.getFeature(), result, newPath);
-            }else if(feature instanceof Document doc){
-                extractFeatures(doc.getFeature(), result, path);
-            }
-        }
-    }
-    private Map<String, Object> convertPlacemarkToMap(Placemark placemark, String path){
-        Map<String, Object> record = new LinkedHashMap<>();
-        record.put("name", placemark.getName() != null ? placemark.getName() : "");
-        record.put("description", placemark.getDescription() != null ? placemark.getDescription(): "");
-        record.put("folder_path", path);
-
-        if(placemark.getGeometry() != null){
-            Object geometry = placemark.getGeometry();
-            record.put("geometry_type", geometry.getClass().getSimpleName());
-
-            if(geometry instanceof Point){
-                Point point = (Point) placemark.getGeometry();
-                if(point.getCoordinates() != null && !point.getCoordinates().isEmpty()){
-                    List<Coordinate> coords = point.getCoordinates();
-                    if(!coords.isEmpty()){
-                        Coordinate coord = coords.get(0);
-                        record.put("longitude", coord.getLongitude());
-                        record.put("latitude", coord.getLatitude());
-                        record.put("altitude", coord.getAltitude());
-                    }
-                }
-            }else if (geometry instanceof LineString line){
-                if(line.getCoordinates() != null){
-                    record.put("coordinates", coordinatesToString(line.getCoordinates()));
-                }
-            }else if(geometry instanceof Polygon polygon){
-                if(polygon.getOuterBoundaryIs() != null &&
-                    polygon.getOuterBoundaryIs().getLinearRing() != null &&
-                    polygon.getOuterBoundaryIs().getLinearRing().getCoordinates() != null){
-                    record.put("outer_boundary", coordinatesToString(
-                            polygon.getOuterBoundaryIs().getLinearRing().getCoordinates()));
-                }
-            }
-        }
-        return record;
-    }
-    private String coordinatesToString(List<Coordinate> coordinates){
-        if(coordinates == null || coordinates.isEmpty()) return "";
-        StringBuilder sb = new StringBuilder();
-        for(Coordinate coordinate: coordinates){
-            sb.append(coordinate.getLongitude())
-                    .append(",")
-                    .append(coordinate.getLatitude());
-            if(coordinate.getAltitude() != 0.0) sb.append(",").append(coordinate.getAltitude());
-            sb.append(" ");
-        }
-        return sb.toString().trim();
     }
 }
