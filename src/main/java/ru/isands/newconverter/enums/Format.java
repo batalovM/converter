@@ -8,10 +8,7 @@ public enum Format {
     PARQUET(".parquet"),
     CSV(".csv"),
     JSON(".json"),
-    XML(".xml"),
-    KML(".kml"),
-    GEOJSON(".geojson"),
-    GML(".gml");
+    XML(".xml");
     private final String suffix;
 
     Format(String suffix) {

@@ -4,17 +4,18 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.dataformat.xml.XmlMapper;
 import com.opencsv.CSVWriter;
-import de.micromata.opengis.kml.v_2_2_0.*;
 import org.apache.avro.Schema;
 import org.apache.avro.generic.GenericData;
 import org.apache.avro.generic.GenericRecord;
 import org.apache.parquet.avro.AvroParquetWriter;
 import org.apache.parquet.hadoop.ParquetWriter;
+import org.apache.parquet.hadoop.metadata.CompressionCodecName;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.io.Resource;
 import org.springframework.core.io.UrlResource;
 import org.springframework.stereotype.Component;
 import ru.isands.newconverter.enums.Format;
+import ru.isands.newconverter.exception.ConversionException;
 
 import java.io.File;
 import java.io.FileWriter;
@@ -33,85 +34,105 @@ public class WriteUtil {
     private final ObjectMapper jsonMapper = new ObjectMapper();
     private final XmlMapper xmlMapper = new XmlMapper();
 
-    public Resource writeToKml(List<Map<String, Object>> data) throws IOException{
-        File tempFile = File.createTempFile("kml_", Format.KML.getSuffix(), new File(tempDir));
-
-        Kml kml = new Kml();
-        Document document = new Document();
-        document.setName("Converted Data");
-        Map<String, Folder> folders = new HashMap<>();
-
-        for(Map<String, Object> record: data){
-            Placemark placemark = createPlacemarkFromRecord(record);
-
-            String path = (String) record.get("folder_path");
-            if(path != null && !path.isEmpty()){
-                Folder folder = folders.computeIfAbsent(path, newPath ->{
-                    Folder f = new Folder();
-                    f.setName(getFolderNameFromPath(path));
-                    return f;
-                });
-                folder.getFeature().add(placemark);
-            }else {
-                document.getFeature().add(placemark);
-            }
+    public Resource writeToParquet(List<Map<String, Object>> data) {
+        if (data == null || data.isEmpty()) {
+            throw new ConversionException("Cannot write empty data to Parquet");
         }
-        for(Folder folder: folders.values()){
-            document.getFeature().add(folder);
-        }
-        kml.setFeature(document);
-        kml.marshal(tempFile);
-        return new UrlResource(tempFile.toURI());
-    }
-
-    public Resource writeToParquet(List<Map<String, Object>> data) throws IOException {
-        File tempFile = File.createTempFile("parquet_", Format.PARQUET.getSuffix(), new File(tempDir));
-        List<Map<String, Object>> typedData = convertToTypedData(data);
-        Schema schema = inferSchema(typedData);
-        try (ParquetWriter<GenericRecord> writer = AvroParquetWriter
-                .<GenericRecord>builder(new org.apache.hadoop.fs.Path(tempFile.getAbsolutePath()))
-                .withSchema(schema)
-                .build()) {
-            for (Map<String, Object> record : typedData) {
-                GenericRecord avroRecord = new GenericData.Record(schema);
-                for (Map.Entry<String, Object> entry : record.entrySet()) {
-                    avroRecord.put(entry.getKey(), convertToAvroType(entry.getValue(),
-                            schema.getField(entry.getKey()).schema()));
+        
+        File tempFile = null;
+        try {
+            tempFile = File.createTempFile("parquet_", Format.PARQUET.getSuffix(), new File(tempDir));
+            List<Map<String, Object>> typedData = convertToTypedData(data);
+            Schema schema = inferSchema(typedData);
+            
+            try (ParquetWriter<GenericRecord> writer = AvroParquetWriter
+                    .<GenericRecord>builder(new org.apache.hadoop.fs.Path(tempFile.getAbsolutePath()))
+                    .withSchema(schema)
+                    .withCompressionCodec(CompressionCodecName.SNAPPY)
+                    .build()) {
+                for (Map<String, Object> record : typedData) {
+                    GenericRecord avroRecord = new GenericData.Record(schema);
+                    for (Map.Entry<String, Object> entry : record.entrySet()) {
+                        avroRecord.put(entry.getKey(), convertToAvroType(entry.getValue(),
+                                schema.getField(entry.getKey()).schema()));
+                    }
+                    writer.write(avroRecord);
                 }
-                writer.write(avroRecord);
             }
+            return new UrlResource(tempFile.toURI());
+        } catch (IOException e) {
+            if (tempFile != null && tempFile.exists()) {
+                tempFile.delete();
+            }
+            throw new ConversionException("Failed to write Parquet file: " + e.getMessage(), e);
         }
-        return new UrlResource(tempFile.toURI());
     }
-    public Resource writeToCsv(List<Map<String, Object>> data) throws IOException {
-        File tempFile = File.createTempFile("file", Format.CSV.getSuffix());
-        try (CSVWriter writer = new CSVWriter(new FileWriter(tempFile, StandardCharsets.UTF_8))) {
-            String[] headers = data.get(0).keySet().toArray(new String[0]);
-            writer.writeNext(headers);
-            for (Map<String, Object> record : data) {
-                String[] row = new String[headers.length];
-                for (int i = 0; i < headers.length; i++) {
-                    Object value = record.get(headers[i]);
-                    row[i] = value != null ? value.toString() : "";
+    public Resource writeToCsv(List<Map<String, Object>> data) {
+        if (data == null || data.isEmpty()) {
+            throw new ConversionException("Cannot write empty data to CSV");
+        }
+        
+        File tempFile = null;
+        try {
+            tempFile = File.createTempFile("csv_", Format.CSV.getSuffix(), new File(tempDir));
+            try (CSVWriter writer = new CSVWriter(new FileWriter(tempFile, StandardCharsets.UTF_8))) {
+                String[] headers = data.get(0).keySet().toArray(new String[0]);
+                writer.writeNext(headers);
+                
+                for (Map<String, Object> record : data) {
+                    String[] row = new String[headers.length];
+                    for (int i = 0; i < headers.length; i++) {
+                        Object value = record.get(headers[i]);
+                        row[i] = value != null ? value.toString() : "";
+                    }
+                    writer.writeNext(row);
                 }
-                writer.writeNext(row);
             }
+            return new UrlResource(tempFile.toURI());
+        } catch (IOException e) {
+            if (tempFile != null && tempFile.exists()) {
+                tempFile.delete();
+            }
+            throw new ConversionException("Failed to write CSV file: " + e.getMessage(), e);
         }
-        return new UrlResource(tempFile.toURI());
     }
-    public Resource writeToJson(List<Map<String, Object>> data) throws IOException{
-        File tempFile = File.createTempFile("file", Format.JSON.getSuffix());
-        jsonMapper.enable(SerializationFeature.INDENT_OUTPUT);
-        jsonMapper.writeValue(tempFile, data);
-        return new UrlResource(tempFile.toURI());
+    public Resource writeToJson(List<Map<String, Object>> data) {
+        if (data == null || data.isEmpty()) {
+            throw new ConversionException("Cannot write empty data to JSON");
+        }
+        
+        File tempFile = null;
+        try {
+            tempFile = File.createTempFile("json_", Format.JSON.getSuffix(), new File(tempDir));
+            jsonMapper.enable(SerializationFeature.INDENT_OUTPUT);
+            jsonMapper.writeValue(tempFile, data);
+            return new UrlResource(tempFile.toURI());
+        } catch (IOException e) {
+            if (tempFile != null && tempFile.exists()) {
+                tempFile.delete();
+            }
+            throw new ConversionException("Failed to write JSON file: " + e.getMessage(), e);
+        }
     }
-    public Resource writeToXml(List<Map<String, Object>> data) throws IOException {
-        File tempFile = File.createTempFile("file", Format.XML.getSuffix());
-        xmlMapper.enable(SerializationFeature.INDENT_OUTPUT);
-        Map<String, Object> wrapper = new HashMap<>();
-        wrapper.put("records", data);
-        xmlMapper.writeValue(tempFile, wrapper);
-        return new UrlResource(tempFile.toURI());
+    public Resource writeToXml(List<Map<String, Object>> data) {
+        if (data == null || data.isEmpty()) {
+            throw new ConversionException("Cannot write empty data to XML");
+        }
+        
+        File tempFile = null;
+        try {
+            tempFile = File.createTempFile("xml_", Format.XML.getSuffix(), new File(tempDir));
+            xmlMapper.enable(SerializationFeature.INDENT_OUTPUT);
+            Map<String, Object> wrapper = new HashMap<>();
+            wrapper.put("records", data);
+            xmlMapper.writeValue(tempFile, wrapper);
+            return new UrlResource(tempFile.toURI());
+        } catch (IOException e) {
+            if (tempFile != null && tempFile.exists()) {
+                tempFile.delete();
+            }
+            throw new ConversionException("Failed to write XML file: " + e.getMessage(), e);
+        }
     }
     private List<Map<String, Object>> convertToTypedData(List<Map<String, Object>> data) {
         if (data.isEmpty()) return data;
@@ -139,15 +160,26 @@ public class WriteUtil {
     private Class<?> determineColumnType(List<Map<String, Object>> data, String column) {
         boolean allNumbers = true;
         boolean hasDecimal = false;
+        boolean allBooleans = true;
+        
         for (Map<String, Object> record : data) {
             Object value = record.get(column);
-            if (value != null) {
-                String strValue = value.toString();
+            if (value != null && value instanceof String) {
+                String strValue = value.toString().trim();
                 if (strValue.isEmpty()) {
                     continue;
                 }
+                
+                // Check for boolean
+                String lowerValue = strValue.toLowerCase();
+                if (!lowerValue.equals("true") && !lowerValue.equals("false") &&
+                    !lowerValue.equals("1") && !lowerValue.equals("0")) {
+                    allBooleans = false;
+                }
+                
+                // Check for number
                 try {
-                    if (strValue.contains(".")) {
+                    if (strValue.contains(".") || strValue.contains("e") || strValue.contains("E")) {
                         Double.parseDouble(strValue);
                         hasDecimal = true;
                     } else {
@@ -155,51 +187,44 @@ public class WriteUtil {
                     }
                 } catch (NumberFormatException e) {
                     allNumbers = false;
-                    break;
+                }
+            } else if (value != null) {
+                // Already typed value
+                allBooleans = false;
+                if (!(value instanceof Number)) {
+                    allNumbers = false;
+                } else if (value instanceof Double || value instanceof Float) {
+                    hasDecimal = true;
                 }
             }
         }
-        if (allNumbers) return hasAllNumbers(hasDecimal, data, column);
-        return hasAllBooleans(data, column);
-    }
-    private Class<?> hasAllNumbers(boolean hasDecimal, List<Map<String, Object>> data, String column){
-        if (hasDecimal) {
-            return Double.class;
-        } else {
-            boolean fitsInInteger = true;
-            for (Map<String, Object> record : data) {
-                Object value = record.get(column);
-                if (value != null) {
-                    String strValue = value.toString();
-                    if (!strValue.isEmpty()) {
-                        long longValue = Long.parseLong(strValue);
-                        if (longValue < Integer.MIN_VALUE || longValue > Integer.MAX_VALUE) {
-                            fitsInInteger = false;
-                            break;
+        
+        if (allBooleans) return Boolean.class;
+        if (allNumbers) {
+            if (hasDecimal) {
+                return Double.class;
+            } else {
+                boolean fitsInInteger = true;
+                for (Map<String, Object> record : data) {
+                    Object value = record.get(column);
+                    if (value != null) {
+                        String strValue = value.toString().trim();
+                        if (!strValue.isEmpty()) {
+                            try {
+                                long longValue = Long.parseLong(strValue);
+                                if (longValue < Integer.MIN_VALUE || longValue > Integer.MAX_VALUE) {
+                                    fitsInInteger = false;
+                                    break;
+                                }
+                            } catch (NumberFormatException e) {
+                                // Skip
+                            }
                         }
                     }
                 }
-            }
-            return fitsInInteger ? Integer.class : Long.class;
-        }
-    }
-    private Class<?> hasAllBooleans(List<Map<String, Object>> data, String column){
-        boolean allBooleans = true;
-        for (Map<String, Object> record : data) {
-            Object value = record.get(column);
-            if (value != null) {
-                String strValue = value.toString().toLowerCase();
-                if (!strValue.isEmpty() &&
-                        !strValue.equals("true") &&
-                        !strValue.equals("false") &&
-                        !strValue.equals("1") &&
-                        !strValue.equals("0")) {
-                    allBooleans = false;
-                    break;
-                }
+                return fitsInInteger ? Integer.class : Long.class;
             }
         }
-        if (allBooleans) return Boolean.class;
         return String.class;
     }
 
@@ -249,7 +274,7 @@ public class WriteUtil {
     }
     private Schema inferSchema(List<Map<String, Object>> typedData) {
         if (typedData.isEmpty()) {
-            throw new IllegalArgumentException("Cannot infer schema from empty data");
+            throw new ConversionException("Cannot infer schema from empty data");
         }
         Set<String> allKeys = new LinkedHashSet<>();
         for (Map<String, Object> record : typedData) {
@@ -265,6 +290,7 @@ public class WriteUtil {
         }
         return Schema.createRecord("Record", null, null, false, fields);
     }
+    
     private Schema inferFieldSchema(List<Map<String, Object>> typedData, String fieldName) {
         Set<Class<?>> types = new HashSet<>();
         for (Map<String, Object> record : typedData) {
@@ -277,7 +303,7 @@ public class WriteUtil {
             return Schema.create(Schema.Type.STRING);
         }
         for (Class<?> type : types) {
-            if (type == Map.class || type == List.class) {
+            if (type == Map.class || type == List.class || type == LinkedHashMap.class || type == ArrayList.class) {
                 return Schema.create(Schema.Type.STRING);
             }
         }
@@ -297,71 +323,9 @@ public class WriteUtil {
         }
         return priorityType != null ? Schema.create(priorityType) : Schema.create(Schema.Type.STRING);
     }
+    
     private boolean parseBoolean(String value) {
-        return value.equalsIgnoreCase("true")
-                || value.equalsIgnoreCase("false")
-                || value.equals("1")
-                || value.equals("0");
-    }
-    private String getFolderNameFromPath(String path){
-        if(path == null || path.isEmpty()) return "Root";
-        String[] parts = path.split("/");
-        return parts[parts.length - 1];
-    }
-    private List<Coordinate> parseCoordinates(String coordStr){
-        List<Coordinate> coordinates = new ArrayList<>();
-        if(coordStr == null || coordStr.trim().isEmpty()){
-            return coordinates;
-        }
-        String[] pairs = coordStr.trim().split("\\s+");
-        for(String pair: pairs){
-            String[] values = pair.split(",");
-            if(values.length >= 2){
-                double lon = Double.parseDouble(values[0]);
-                double lat = Double.parseDouble(values[1]);
-                double alt = values.length >= 3 ? Double.parseDouble(values[2]) : 0.0;
-                coordinates.add(new Coordinate(lon, lat, alt));
-            }
-        }
-        return coordinates;
-    }
-    private Placemark createPlacemarkFromRecord(Map<String, Object> record) {
-        Placemark placemark = new Placemark();
-
-        placemark.setName((String) record.getOrDefault("name", "Unnamed"));
-        placemark.setDescription((String) record.getOrDefault("description", ""));
-
-        String geometryType = (String) record.get("geometry_type");
-        if ("Point".equals(geometryType) &&
-                record.containsKey("longitude") &&
-                record.containsKey("latitude")) {
-            Point point = new Point();
-            double lon = ((Number) record.get("longitude")).doubleValue();
-            double lat = ((Number) record.get("latitude")).doubleValue();
-            double alt = record.containsKey("altitude") ? ((Number) record.get("altitude")).doubleValue() : 0.0;
-            point.addToCoordinates(lon + "," + lat + "," + alt);
-            placemark.setGeometry(point);
-        } else if ("LineString".equals(geometryType) && record.containsKey("coordinates")) {
-            String coordStr = (String) record.get("coordinates");
-            List<Coordinate> coordinates = parseCoordinates(coordStr);
-            if (!coordinates.isEmpty()) {
-                LineString line = new LineString();
-                line.setCoordinates(coordinates);
-                placemark.setGeometry(line);
-            }
-        } else if ("Polygon".equals(geometryType) && record.containsKey("outer_boundary")) {
-            String coordStr = (String) record.get("outer_boundary");
-            List<Coordinate> coords = parseCoordinates(coordStr);
-            if (!coords.isEmpty()) {
-                Polygon polygon = new Polygon();
-                Boundary outer = new Boundary();
-                LinearRing ring = new LinearRing();
-                ring.setCoordinates(coords);
-                outer.setLinearRing(ring);
-                polygon.setOuterBoundaryIs(outer);
-                placemark.setGeometry(polygon);
-            }
-        }
-        return placemark;
+        String lowerValue = value.toLowerCase();
+        return lowerValue.equals("true") || lowerValue.equals("1");
     }
 }
