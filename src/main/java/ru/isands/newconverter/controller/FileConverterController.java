@@ -25,7 +25,7 @@ public class FileConverterController {
     @PostMapping(value = "/json", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     @Operation(description = "parquet -> json")
     public ResponseEntity<Resource> getJson(@Parameter(description = "Файл (входной)") @RequestParam("file") MultipartFile file) throws Exception{
-        Resource json = converterService.convertJson(file, Format.KML);
+        Resource json = converterService.convertJson(file, Format.PARQUET);
         return ResponseEntity.ok()
                 .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=file.json")
                 .contentType(MediaType.parseMediaType(MediaType.MULTIPART_FORM_DATA_VALUE))
