@@ -15,56 +15,7 @@
     <properties>
         <java.version>17</java.version>
     </properties>
-    <repositories>
-        <repository>
-            <id>osgeo</id>
-            <name>OSGeo Release Repository</name>
-            <url>https://repo.osgeo.org/repository/release/</url>
-        </repository>
-    </repositories>
     <dependencies>
-        <dependency>
-            <groupId>org.geotools.xsd</groupId>
-            <artifactId>gt-xsd-gml3</artifactId>
-            <version>31.0</version>
-        </dependency>
-        <dependency>
-            <groupId>org.geotools.xsd</groupId>
-            <artifactId>gt-xsd-wfs</artifactId>
-            <version>31.0</version>
-        </dependency>
-        <dependency>
-            <groupId>org.geotools</groupId>
-            <artifactId>gt-geojson-core</artifactId>
-            <version>31.0</version>
-        </dependency>
-        <dependency>
-            <groupId>org.geotools</groupId>
-            <artifactId>gt-geojson</artifactId>
-            <version>30.1</version>
-        </dependency>
-        <dependency>
-            <groupId>org.geotools.xsd</groupId>
-            <artifactId>gt-xsd-kml</artifactId>
-            <version>31.0</version>
-        </dependency>
-        <dependency>
-            <groupId>org.geotools</groupId>
-            <artifactId>gt-main</artifactId>
-            <version>31.0</version>
-        </dependency>
-        <dependency>
-            <groupId>org.geotools</groupId>
-            <artifactId>gt-epsg-hsql</artifactId>
-            <version>31.0</version>
-        </dependency>
-        <!-- Source: https://mvnrepository.com/artifact/uk.m0nom/javaapiforkml -->
-        <dependency>
-            <groupId>uk.m0nom</groupId>
-            <artifactId>javaapiforkml</artifactId>
-            <version>3.0.11</version>
-            <scope>compile</scope>
-        </dependency>
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-web</artifactId>
